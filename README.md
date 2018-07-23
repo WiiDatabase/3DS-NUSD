@@ -27,3 +27,5 @@ optional arguments:
   - [ ] Support for decrypting & SHA256 verify
   - [ ] uselocal parameter (needs SHA256 verifying)
   - [ ] GUI
+  
+  ![Screenshot](screenshot.png?raw=true)
