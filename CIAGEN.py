@@ -3,6 +3,8 @@ import binascii
 import os
 import struct
 
+from requests import get, HTTPError
+
 import utils
 from Struct import Struct
 
@@ -288,7 +290,6 @@ class CIAMaker:
 
     Args:
         directory (str): Path to dir with cetk + tmd + contents
-        output (str): Output path & name
     """
 
     class CIAHeader(Struct):
@@ -387,3 +388,35 @@ class CIAMaker:
         output += str(self.ticket)
 
         return output
+
+
+class NUS:
+    # TODO: Complete this
+    """Downloads titles from NUS.
+
+    Args:
+        titleid (str): Valid hex Title ID (16 chars)
+        titlever (int, optional): Valid Title version. Defaults to latest
+        directory (str, optional): Output directory
+        base (str, optional): NUS CDN. Defaults to "nus.cdn.c.shop.nintendowifi.net"
+    """
+
+    def __init__(
+            self,
+            titleid,
+            titlever=None,
+            directory=None,
+            base="http://nus.cdn.c.shop.nintendowifi.net/ccs/download"
+    ):
+
+        self.url = base + titleid.lower()
+        tmd_url = base + "/{0}/tmd".format(titleid)
+
+        if titlever:
+            tmd_url += ".{0}".format(titlever)
+        try:
+            req = get(tmd_url)
+            req.raise_for_status()
+        except HTTPError:
+            print("Title not found on NUS")
+            return

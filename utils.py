@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
 import math
+try:
+    import asyncio
+except (ImportError, SyntaxError):
+    asyncio = None
 
 
 def align(value, blocksize=64):
@@ -65,3 +69,31 @@ def get_key_length(key_type):
         return key_sizes[key_type]
     except IndexError:
         raise ValueError("Invalid key type {0}".format(key_type))
+
+
+class CachedProperty(object):
+    """https://github.com/pydanny/cached-property"""
+
+    def __init__(self, func):
+        self.__doc__ = getattr(func, "__doc__")
+        self.func = func
+
+    def __get__(self, obj, cls):
+        if obj is None:
+            return self
+
+        if asyncio and asyncio.iscoroutinefunction(self.func):
+            return self._wrap_in_coroutine(obj)
+
+        value = obj.__dict__[self.func.__name__] = self.func(obj)
+        return value
+
+    def _wrap_in_coroutine(self, obj):
+
+        @asyncio.coroutine
+        def wrapper():
+            future = asyncio.ensure_future(self.func(obj))
+            obj.__dict__[self.func.__name__] = future
+            return future
+
+        return wrapper()
