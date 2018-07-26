@@ -148,14 +148,23 @@ class TMD:
             size += content.size
         return size
 
-    def __len__(self):
-        content_info_size = 0
+    def pack(self):
+        """Returns TMD WITHOUT certificates."""
+        pack = self.signature_type + self.signature_data + self.hdr.pack()
         for content_info in self.content_info:
-            content_info_size += len(content_info)
-        content_size = 0
+            pack += content_info.pack()
         for content in self.contents:
-            content_size += len(content)
-        return 0x04 + len(self.signature_data) + len(self.hdr) + content_info_size + content_size
+            pack += content.pack()
+        return pack
+
+    def __len__(self):
+        """Returns length of TMD WITHOUT certificates."""
+        size = 0x04
+        for content_info in self.content_info:
+            size += len(content_info)
+        for content in self.contents:
+            size += len(content)
+        return size + len(self.signature_data) + len(self.hdr)
 
     def __repr__(self):
         return 'Title {id} v{ver}'.format(
@@ -248,7 +257,12 @@ class Ticket:
     def get_titleid(self):
         return "{:08X}".format(self.hdr.titleid).zfill(16).lower()
 
+    def pack(self):
+        """Returns ticket WITHOUT certificates"""
+        return self.signature_type + self.signature_data + self.hdr.pack()
+
     def __len__(self):
+        """Returns length of ticket WITHOUT certificates"""
         return 0x04 + len(self.signature_data) + len(self.hdr)
 
     def __repr__(self):
@@ -273,8 +287,8 @@ class CIAMaker:
        Reference: https://www.3dbrew.org/wiki/CIA
 
     Args:
-        f (str): Path to dir
-        out (str): Output path & name
+        directory (str): Path to dir with cetk + tmd + contents
+        output (str): Output path & name
     """
 
     class CIAHeader(Struct):
@@ -289,12 +303,14 @@ class CIAMaker:
             self.contentsize = Struct.uint64
             self.content_index = Struct.uint8[0x2000]
 
-    def __init__(self, f, output=None):
-        self.ticket = Ticket(os.path.join(f, "cetk"))
-        self.tmd = TMD(os.path.join(f, "tmd"))
+    def __init__(self, directory):
+        self.ticket = Ticket(os.path.join(directory, "cetk"))
+        self.tmd = TMD(os.path.join(directory, "tmd"))
+        self.contents = []
 
         # Order of Certs in the CIA: Root Cert, Cetk Cert, TMD Cert (Root + XS + CP)
         # Take the root cert from ticket (can also be taken from the TMD)
+        # TODO: Improve certificate class + check if right certificates
         self.certchain = self.ticket.certificates[1].signature_type
         self.certchain += self.ticket.certificates[1].signature_data
         self.certchain += self.ticket.certificates[1].pack()
@@ -321,6 +337,16 @@ class CIAMaker:
         self.hdr.contentsize = self.tmd.get_content_size()
         for i in range(self.tmd.hdr.contentcount):
             self.hdr.content_index[0] |= 0x80 >> (i & 7)
+
+        # Contents
+        for content in self.tmd.contents:
+            self.contents.append(open(os.path.join(directory, content.get_cid()), 'rb'))
+
+    def dump(self, output):
+        """Dumps CIA to output. Replaces {titleid} and {titleversion} if in filename."""
+        output = output.format(titleid=self.tmd.get_titleid(), titleversion=self.tmd.hdr.titleversion)
+
+        # Header
         cia = self.hdr.pack()
         cia += utils.align(len(self.hdr))
 
@@ -329,27 +355,35 @@ class CIAMaker:
         cia += utils.align(len(self.certchain))
 
         # Ticket
-        cia += self.ticket.signature_type + self.ticket.signature_data + self.ticket.hdr.pack()
+        cia += self.ticket.pack()
         cia += utils.align(self.hdr.ticketsize)
 
         # TMD
-        cia += self.tmd.signature_type + self.tmd.signature_data + self.tmd.hdr.pack()
-        for content_info in self.tmd.content_info:
-            cia += content_info.pack()
-        for content in self.tmd.contents:
-            cia += content.pack()
+        cia += self.tmd.pack()
         cia += utils.align(self.hdr.tmdsize)
 
-        # TODO: Improve this, bit complicated with content files (should not be in memory)
-        if not output:
-            output = os.path.join(f, "{titleid}-v{titleversion}.cia")
-        output = output.format(titleid=self.tmd.get_titleid(), titleversion=self.tmd.hdr.titleversion)
+        # Writing CIA
         with open(output, "wb") as cia_file:
             cia_file.write(cia)
-            # Contents
-            for content in self.tmd.contents:
-                with open(os.path.join(f, content.get_cid()), 'rb') as content_file:
-                    for chunk in utils.read_in_chunks(content_file):
-                        cia_file.write(chunk)
-                        cia_file.write(utils.align(content.size))
-            cia += utils.align(self.hdr.contentsize)
+            # Not forgetting Contents!
+            for i, content in enumerate(self.contents):
+                for chunk in utils.read_in_chunks(content):
+                    cia_file.write(chunk)
+                    cia_file.write(utils.align(self.tmd.contents[i].size))
+            cia_file.write(utils.align(self.hdr.contentsize))
+
+    def __del__(self):
+        for content in self.contents:
+            content.close()
+
+    def __repr__(self):
+        return "CIA Maker for Title {titleid} v{titlever}".format(
+            titleid=self.tmd.get_titleid(),
+            titlever=self.tmd.hdr.titleversion
+        )
+
+    def __str__(self):
+        output = str(self.tmd) + "\n"
+        output += str(self.ticket)
+
+        return output
