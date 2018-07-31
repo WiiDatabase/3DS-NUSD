@@ -48,7 +48,7 @@ class Signature:
         elif self.signature_length == 0x3C + 0x40:
             self.signature = self.SignatureECDSASHA256()
         else:
-            raise Exception("Unknown signature type {0}".format(signature_type))
+            raise Exception("Unknown signature type {0}".format(signature_type))  # Should never happen
         self.signature = self.signature.unpack(filebytes[:0x04 + self.signature_length])
 
     def __len__(self):
@@ -71,17 +71,78 @@ class Signature:
             return "Unknown"
 
 
-class Certificate(Struct):
+class Certificate:
     """Represents a Certificate
        Reference: https://www.3dbrew.org/wiki/Certificates
     """
-    __endian__ = Struct.BE
 
-    def __format__(self):
-        self.issuer = Struct.string(0x40)
-        self.key_type = Struct.uint32
-        self.name = Struct.string(0x40)
-        self.unknown = Struct.uint32
+    class CertificateStruct(Struct):
+        __endian__ = Struct.BE
+
+        def __format__(self):
+            self.issuer = Struct.string(0x40)
+            self.key_type = Struct.uint32
+            self.name = Struct.string(0x40)
+            self.unknown = Struct.uint32
+
+    class PubKeyRSA4096(Struct):
+        __endian__ = Struct.BE
+
+        def __format__(self):
+            self.modulus = Struct.string(0x200)
+            self.exponent = Struct.uint32
+            self.padding = Struct.string(0x34)
+
+    class PubKeyRSA2048(Struct):
+        __endian__ = Struct.BE
+
+        def __format__(self):
+            self.modulus = Struct.string(0x100)
+            self.exponent = Struct.uint32
+            self.padding = Struct.string(0x34)
+
+    class PubKeyECC(Struct):
+        __endian__ = Struct.BE
+
+        def __format__(self):
+            self.key = Struct.string(0x3C)
+            self.padding = Struct.string(0x3C)
+
+    def __init__(self, filebytes):
+        self.signature = Signature(filebytes)
+        self.certificate = self.CertificateStruct().unpack(
+            filebytes[len(self.signature):
+                      len(self.signature) + len(self.CertificateStruct())]
+        )
+        pubkey_length = utils.get_key_length(self.certificate.key_type)
+        if pubkey_length == 0x200 + 0x4 + 0x34:
+            self.pubkey = self.PubKeyRSA4096()
+        elif pubkey_length == 0x100 + 0x4 + 0x34:
+            self.pubkey = self.PubKeyRSA2048()
+        elif pubkey_length == 0x3C + 0x3C:
+            self.pubkey = self.PubKeyECC()
+        else:
+            raise Exception("Unknown Public Key type")  # Should never happen
+        self.pubkey = self.pubkey.unpack(
+            filebytes[len(self.signature) + len(self.certificate):
+                      len(self.signature) + len(self.certificate) + pubkey_length]
+        )
+
+    def __len__(self):
+        return len(self.signature) + len(self.certificate) + len(self.pubkey)
+
+    def __repr__(self):
+        return "{0} issued by {1}".format(self.get_name(), self.get_issuer())
+
+    def pack(self):
+        return self.signature.pack() + self.certificate.pack() + self.pubkey.pack()
+
+    def get_issuer(self):
+        return self.certificate.issuer.rstrip(b"\00").decode()
+
+    def get_name(self):
+        return self.certificate.name.rstrip(b"\00").decode()
+
 
 
 class TMD:
@@ -193,14 +254,10 @@ class TMD:
 
         # Certificates
         self.certificates = []
-        for i in range(2):
-            self.certificates.append(Certificate())
-            cert_offset = file.tell()
-            cert_signature = Signature(file.read())
-            file.seek(cert_offset + len(cert_signature))
-            self.certificates[i].unpack(file.read(0x88))
-            self.certificates[i].signature = cert_signature
-            self.certificates[i].pubkey = file.read(utils.get_key_length(self.certificates[i].key_type))
+        cert_offset = file.tell()
+        self.certificates.append(Certificate(file.read()))
+        file.seek(cert_offset + len(self.certificates[0]))
+        self.certificates.append(Certificate(file.read()))
 
     def get_titleid(self):
         return "{:08X}".format(self.hdr.titleid).zfill(16).lower()
@@ -308,14 +365,10 @@ class Ticket:
 
         # Certificates
         self.certificates = []
-        for i in range(2):
-            self.certificates.append(Certificate())
-            cert_offset = file.tell()
-            cert_signature = Signature(file.read())
-            file.seek(cert_offset + len(cert_signature))
-            self.certificates[i].unpack(file.read(0x88))
-            self.certificates[i].signature = cert_signature
-            self.certificates[i].pubkey = file.read(utils.get_key_length(self.certificates[i].key_type))
+        cert_offset = file.tell()
+        self.certificates.append(Certificate(file.read()))
+        file.seek(cert_offset + len(self.certificates[0]))
+        self.certificates.append(Certificate(file.read()))
 
     def get_titleid(self):
         return "{:08X}".format(self.hdr.titleid).zfill(16).lower()
@@ -372,20 +425,19 @@ class CIAMaker:
 
         # Order of Certs in the CIA: Root Cert, Cetk Cert, TMD Cert (Root + XS + CP)
         # Take the root cert from ticket (can also be taken from the TMD)
-        # TODO: Improve certificate class + check if right certificates
-        self.certchain = self.ticket.certificates[1].signature.pack()
-        self.certchain += self.ticket.certificates[1].pack()
-        self.certchain += self.ticket.certificates[1].pubkey
+        root_cert = self.ticket.certificates[1]
+        if root_cert.get_name() != "CA00000003" and root_cert.get_name() != "CA00000004":
+            raise Exception("Root Certificate not found")
 
-        # Cetk Cert
-        self.certchain += self.ticket.certificates[0].signature.pack()
-        self.certchain += self.ticket.certificates[0].pack()
-        self.certchain += self.ticket.certificates[0].pubkey
+        cetk_cert = self.ticket.certificates[0]
+        if cetk_cert.get_name() != "XS0000000c" and cetk_cert.get_name() != "XS00000009":
+            raise Exception("Cetk Certificate not found")
 
-        # TMD Cert
-        self.certchain += self.tmd.certificates[0].signature.pack()
-        self.certchain += self.tmd.certificates[0].pack()
-        self.certchain += self.tmd.certificates[0].pubkey
+        tmd_cert = self.tmd.certificates[0]
+        if tmd_cert.get_name() != "CP0000000b" and tmd_cert.get_name() != "CP0000000a":
+            raise Exception("TMD Certificate not found")
+
+        self.certchain = root_cert.pack() + cetk_cert.pack() + tmd_cert.pack()
 
         # CIA Header
         self.hdr = self.CIAHeader()
