@@ -44,9 +44,9 @@ def get_sig_size(signature_type):
     # https://www.3dbrew.org/wiki/Title_metadata#Signature_Type
     signature_type = signature_type.hex()
     signature_sizes = {
-        "00010000": 0x200 + 0x3C,
-        "00010001": 0x100 + 0x3C,
-        "00010002": 0x3C + 0x40,
+        # "00010000": 0x200 + 0x3C,
+        # "00010001": 0x100 + 0x3C,
+        # "00010002": 0x3C + 0x40,
         "00010003": 0x200 + 0x3C,
         "00010004": 0x100 + 0x3C,
         "00010005": 0x3C + 0x40

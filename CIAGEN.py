@@ -9,6 +9,68 @@ import utils
 from Struct import Struct
 
 
+class Signature:
+    """Represents the Signature
+       Reference: https://www.3dbrew.org/wiki/Title_metadata#Signature_Data
+    """
+
+    class SignatureRSA2048SHA256(Struct):
+        __endian__ = Struct.BE
+
+        def __format__(self):
+            self.type = Struct.uint32
+            self.data = Struct.string(0x100)
+            self.padding = Struct.string(0x3C)
+
+    class SignatureRSA4096SHA256(Struct):
+        __endian__ = Struct.BE
+
+        def __format__(self):
+            self.type = Struct.uint32
+            self.data = Struct.string(0x200)
+            self.padding = Struct.string(0x3C)
+
+    class SignatureECDSASHA256(Struct):
+        __endian__ = Struct.BE
+
+        def __format__(self):
+            self.type = Struct.uint32
+            self.data = Struct.string(0x3C)
+            self.padding = Struct.string(0x40)
+
+    def __init__(self, filebytes):
+        signature_type = filebytes[:4]
+        self.signature_length = utils.get_sig_size(signature_type)
+        if self.signature_length == 0x200 + 0x3C:
+            self.signature = self.SignatureRSA4096SHA256()
+        elif self.signature_length == 0x100 + 0x3C:
+            self.signature = self.SignatureRSA2048SHA256()
+        elif self.signature_length == 0x3C + 0x40:
+            self.signature = self.SignatureECDSASHA256()
+        else:
+            raise Exception("Unknown signature type {0}".format(signature_type))
+        self.signature = self.signature.unpack(filebytes[:0x04 + self.signature_length])
+
+    def __len__(self):
+        return 0x04 + self.signature_length
+
+    def __repr__(self):
+        return "{0} Signature Data".format(self.get_signature_type())
+
+    def pack(self):
+        return self.signature.pack()
+
+    def get_signature_type(self):
+        if self.signature_length == 0x200 + 0x3C:
+            return "RSA_4096 SHA256"
+        elif self.signature_length == 0x100 + 0x3C:
+            return "RSA_2048 SHA256"
+        elif self.signature_length == 0x3C + 0x40:
+            return "ECDSA SHA256"
+        else:
+            return "Unknown"
+
+
 class Certificate(Struct):
     """Represents a Certificate
        Reference: https://www.3dbrew.org/wiki/Certificates
@@ -112,9 +174,9 @@ class TMD:
         except FileNotFoundError:
             raise FileNotFoundError('File not found')
 
-        # Signature data
-        self.signature_type = file.read(0x4)
-        self.signature_data = file.read(utils.get_sig_size(self.signature_type))
+        # Signature
+        self.signature = Signature(file.read())
+        file.seek(len(self.signature))
 
         # Header
         self.hdr = self.TMDHeader().unpack(file.read(0xC4))
@@ -130,15 +192,14 @@ class TMD:
             self.contents.append(self.TMDContents().unpack(file.read(0x30)))
 
         # Certificates
-        # Certificates
         self.certificates = []
         for i in range(2):
             self.certificates.append(Certificate())
-            signature_type = file.read(0x4)
-            signature_data = file.read(utils.get_sig_size(signature_type))
+            cert_offset = file.tell()
+            cert_signature = Signature(file.read())
+            file.seek(cert_offset + len(cert_signature))
             self.certificates[i].unpack(file.read(0x88))
-            self.certificates[i].signature_type = signature_type
-            self.certificates[i].signature_data = signature_data
+            self.certificates[i].signature = cert_signature
             self.certificates[i].pubkey = file.read(utils.get_key_length(self.certificates[i].key_type))
 
     def get_titleid(self):
@@ -152,7 +213,7 @@ class TMD:
 
     def pack(self):
         """Returns TMD WITHOUT certificates."""
-        pack = self.signature_type + self.signature_data + self.hdr.pack()
+        pack = self.signature.pack() + self.hdr.pack()
         for content_info in self.content_info:
             pack += content_info.pack()
         for content in self.contents:
@@ -161,12 +222,12 @@ class TMD:
 
     def __len__(self):
         """Returns length of TMD WITHOUT certificates."""
-        size = 0x04
+        size = 0
         for content_info in self.content_info:
             size += len(content_info)
         for content in self.contents:
             size += len(content)
-        return size + len(self.signature_data) + len(self.hdr)
+        return size + len(self.signature) + len(self.hdr)
 
     def __repr__(self):
         return 'Title {id} v{ver}'.format(
@@ -237,9 +298,9 @@ class Ticket:
         except FileNotFoundError:
             raise FileNotFoundError('File not found')
 
-        # Signature data
-        self.signature_type = file.read(0x4)
-        self.signature_data = file.read(utils.get_sig_size(self.signature_type))
+        # Signature
+        self.signature = Signature(file.read())
+        file.seek(len(self.signature))
 
         # Header
         self.hdr = self.TicketHeader().unpack(file.read(0x210))
@@ -249,11 +310,11 @@ class Ticket:
         self.certificates = []
         for i in range(2):
             self.certificates.append(Certificate())
-            signature_type = file.read(0x4)
-            signature_data = file.read(utils.get_sig_size(signature_type))
+            cert_offset = file.tell()
+            cert_signature = Signature(file.read())
+            file.seek(cert_offset + len(cert_signature))
             self.certificates[i].unpack(file.read(0x88))
-            self.certificates[i].signature_type = signature_type
-            self.certificates[i].signature_data = signature_data
+            self.certificates[i].signature = cert_signature
             self.certificates[i].pubkey = file.read(utils.get_key_length(self.certificates[i].key_type))
 
     def get_titleid(self):
@@ -261,11 +322,11 @@ class Ticket:
 
     def pack(self):
         """Returns ticket WITHOUT certificates"""
-        return self.signature_type + self.signature_data + self.hdr.pack()
+        return self.signature.pack() + self.hdr.pack()
 
     def __len__(self):
         """Returns length of ticket WITHOUT certificates"""
-        return 0x04 + len(self.signature_data) + len(self.hdr)
+        return len(self.signature) + len(self.hdr)
 
     def __repr__(self):
         return 'Ticket for title {id} v{ver}'.format(id=self.get_titleid(), ver=self.hdr.titleversion)
@@ -312,26 +373,23 @@ class CIAMaker:
         # Order of Certs in the CIA: Root Cert, Cetk Cert, TMD Cert (Root + XS + CP)
         # Take the root cert from ticket (can also be taken from the TMD)
         # TODO: Improve certificate class + check if right certificates
-        self.certchain = self.ticket.certificates[1].signature_type
-        self.certchain += self.ticket.certificates[1].signature_data
+        self.certchain = self.ticket.certificates[1].signature.pack()
         self.certchain += self.ticket.certificates[1].pack()
         self.certchain += self.ticket.certificates[1].pubkey
 
         # Cetk Cert
-        self.certchain += self.ticket.certificates[0].signature_type
-        self.certchain += self.ticket.certificates[0].signature_data
+        self.certchain += self.ticket.certificates[0].signature.pack()
         self.certchain += self.ticket.certificates[0].pack()
         self.certchain += self.ticket.certificates[0].pubkey
 
         # TMD Cert
-        self.certchain += self.tmd.certificates[0].signature_type
-        self.certchain += self.tmd.certificates[0].signature_data
+        self.certchain += self.tmd.certificates[0].signature.pack()
         self.certchain += self.tmd.certificates[0].pack()
         self.certchain += self.tmd.certificates[0].pubkey
 
         # CIA Header
         self.hdr = self.CIAHeader()
-        self.hdr.hdrsize = 0x2020
+        self.hdr.hdrsize = len(self.hdr)
         self.hdr.certchainsize = len(self.certchain)
         self.hdr.ticketsize = len(self.ticket)
         self.hdr.tmdsize = len(self.tmd)
