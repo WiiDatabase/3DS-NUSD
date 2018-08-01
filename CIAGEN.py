@@ -6,6 +6,7 @@ import struct
 from requests import get, HTTPError
 
 import utils
+from utils import CachedProperty
 from Struct import Struct
 
 
@@ -144,13 +145,12 @@ class Certificate:
         return self.certificate.name.rstrip(b"\00").decode()
 
 
-
 class TMD:
     """Represents the Title Metadata
        Reference: https://www.3dbrew.org/wiki/Title_metadata
 
     Args:
-        f (str): Path to TMD
+        file (Union[str, bytes]): Path to TMD or a TMD bytes-object
     """
 
     class TMDHeader(Struct):
@@ -229,35 +229,38 @@ class TMD:
 
             return output
 
-    def __init__(self, f):
-        try:
-            file = open(f, 'rb')
-        except FileNotFoundError:
-            raise FileNotFoundError('File not found')
+    def __init__(self, file):
+        if isinstance(file, str):  # Load file
+            try:
+                file = open(file, 'rb').read()
+            except FileNotFoundError:
+                raise FileNotFoundError('File not found')
 
         # Signature
-        self.signature = Signature(file.read())
-        file.seek(len(self.signature))
+        self.signature = Signature(file)
+        pos = len(self.signature)
 
         # Header
-        self.hdr = self.TMDHeader().unpack(file.read(0xC4))
+        self.hdr = self.TMDHeader().unpack(file[pos:pos + 0xC4])
+        pos += len(self.hdr)
 
         # Content Info Records
         self.content_info = []
         for i in range(64):
-            self.content_info.append(self.TMDContentInfoRecords().unpack(file.read(0x24)))
+            self.content_info.append(self.TMDContentInfoRecords().unpack(file[pos:pos + 0x24]))
+            pos += 0x24
 
         # Content Chunk Records
         self.contents = []
         for i in range(self.hdr.contentcount):
-            self.contents.append(self.TMDContents().unpack(file.read(0x30)))
+            self.contents.append(self.TMDContents().unpack(file[pos:pos + 0x30]))
+            pos += 0x30
 
         # Certificates
         self.certificates = []
-        cert_offset = file.tell()
-        self.certificates.append(Certificate(file.read()))
-        file.seek(cert_offset + len(self.certificates[0]))
-        self.certificates.append(Certificate(file.read()))
+        self.certificates.append(Certificate(file[pos:]))
+        pos += len(self.certificates[0])
+        self.certificates.append(Certificate(file[pos:]))
 
     def get_titleid(self):
         return "{:08X}".format(self.hdr.titleid).zfill(16).lower()
@@ -276,6 +279,21 @@ class TMD:
         for content in self.contents:
             pack += content.pack()
         return pack
+
+    def dump(self, output=None):
+        """Dumps TMD to output WITH Certificates. Replaces {titleid} and {titleversion} if in filename.
+           Returns raw binary if no output is given, returns the file path else.
+        """
+        output = output.format(titleid=self.get_titleid(), titleversion=self.hdr.titleversion)
+        pack = self.pack()
+        for cert in self.certificates:
+            pack += cert.pack()
+        if output:
+            with open(output, "wb") as tmd_file:
+                tmd_file.write(pack)
+                return output
+        else:
+            return pack
 
     def __len__(self):
         """Returns length of TMD WITHOUT certificates."""
@@ -317,7 +335,7 @@ class Ticket:
        Reference: https://www.3dbrew.org/wiki/Ticket
 
     Args:
-        f (str): Path to Ticket
+        file (Union[str, bytes]): Path to Ticket or a Ticket bytes-object
     """
 
     class TicketHeader(Struct):
@@ -347,28 +365,29 @@ class Ticket:
             self.demo = Struct.uint32
             self.maxplaycount = Struct.uint32
             self.limits = Struct.string(0x38)
-            self.cid = Struct.string(0xAC)
+            self.cindex = Struct.string(0xAC)
 
-    def __init__(self, f):
-        try:
-            file = open(f, 'rb')
-        except FileNotFoundError:
-            raise FileNotFoundError('File not found')
+    def __init__(self, file):
+        if isinstance(file, str):
+            try:
+                file = open(file, 'rb').read()
+            except FileNotFoundError:
+                raise FileNotFoundError('File not found')
 
         # Signature
-        self.signature = Signature(file.read())
-        file.seek(len(self.signature))
+        self.signature = Signature(file)
+        pos = len(self.signature)
 
         # Header
-        self.hdr = self.TicketHeader().unpack(file.read(0x210))
+        self.hdr = self.TicketHeader().unpack(file[pos:pos + 0x210])
+        pos += len(self.hdr)
         self.titleiv = struct.pack(">Q", self.hdr.titleid) + b"\x00" * 8
 
         # Certificates
         self.certificates = []
-        cert_offset = file.tell()
-        self.certificates.append(Certificate(file.read()))
-        file.seek(cert_offset + len(self.certificates[0]))
-        self.certificates.append(Certificate(file.read()))
+        self.certificates.append(Certificate(file[pos:]))
+        pos += len(self.certificates[0])
+        self.certificates.append(Certificate(file[pos:]))
 
     def get_titleid(self):
         return "{:08X}".format(self.hdr.titleid).zfill(16).lower()
@@ -376,6 +395,22 @@ class Ticket:
     def pack(self):
         """Returns ticket WITHOUT certificates"""
         return self.signature.pack() + self.hdr.pack()
+
+    def dump(self, output=None):
+        """Dumps ticket to output WITH Certificates. Replaces {titleid} and {titleversion} if in filename.
+           NOTE that the titleversion in the ticket is often wrong!
+           Returns raw binary if no output is given, returns the file path else.
+        """
+        output = output.format(titleid=self.get_titleid(), titleversion=self.hdr.titleversion)
+        pack = self.pack()
+        for cert in self.certificates:
+            pack += cert.pack()
+        if output:
+            with open(output, "wb") as cetk_file:
+                cetk_file.write(pack)
+                return output
+        else:
+            return pack
 
     def __len__(self):
         """Returns length of ticket WITHOUT certificates"""
@@ -501,13 +536,11 @@ class CIAMaker:
 
 
 class NUS:
-    # TODO: Complete this
     """Downloads titles from NUS.
 
     Args:
         titleid (str): Valid hex Title ID (16 chars)
         titlever (int, optional): Valid Title version. Defaults to latest
-        directory (str, optional): Output directory
         base (str, optional): NUS CDN. Defaults to "nus.cdn.c.shop.nintendowifi.net"
     """
 
@@ -515,18 +548,45 @@ class NUS:
             self,
             titleid,
             titlever=None,
-            directory=None,
             base="http://nus.cdn.c.shop.nintendowifi.net/ccs/download"
     ):
+        self.url = base + "/" + titleid.lower() + "/"
+        self._titlever = titlever
 
-        self.url = base + titleid.lower()
-        tmd_url = base + "/{0}/tmd".format(titleid)
+    @CachedProperty
+    def tmd(self):
+        tmd_url = self.url + "tmd"
 
-        if titlever:
-            tmd_url += ".{0}".format(titlever)
+        if self._titlever:
+            tmd_url += ".{0}".format(self._titlever)
         try:
             req = get(tmd_url)
             req.raise_for_status()
         except HTTPError:
-            print("Title not found on NUS")
-            return
+            raise HTTPError("Title not found on NUS")
+
+        return TMD(req.content)
+
+    @CachedProperty
+    def ticket(self):
+        cetk_url = self.url + "cetk"
+        try:
+            req = get(cetk_url)
+            req.raise_for_status()
+        except HTTPError:
+            return None
+
+        return Ticket(req.content)
+
+    def get_content_urls(self):
+        """Returns content urls"""
+        urls = []
+        for content in self.tmd.contents:
+            urls.append(self.url + content.get_cid())
+        return urls
+
+    def __repr__(self):
+        return "Title {id} v{ver} on NUS".format(
+            id=self.tmd.get_titleid(),
+            ver=self.tmd.hdr.titleversion,
+        )
