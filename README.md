@@ -25,7 +25,7 @@ optional arguments:
   
   ## TODO
   - [X] Use Structs (already in CIAGEN)
-  - [ ] Improve Struct code (for e.g. ticket template and reading from binary)
+  - [X] Improve Struct code (for e.g. ticket template and reading from binary)
   - [ ] More Error handling and retrying
   - [ ] Improve error handling in CIAGEN, especially for certificates and too short tmds/tickets
   - [ ] Support for decrypting & SHA256 verify
