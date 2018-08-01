@@ -6,8 +6,8 @@ import struct
 from requests import get, HTTPError
 
 import utils
-from utils import CachedProperty
 from Struct import Struct
+from utils import CachedProperty
 
 
 class Signature:
@@ -284,7 +284,8 @@ class TMD:
         """Dumps TMD to output WITH Certificates. Replaces {titleid} and {titleversion} if in filename.
            Returns raw binary if no output is given, returns the file path else.
         """
-        output = output.format(titleid=self.get_titleid(), titleversion=self.hdr.titleversion)
+        if output:
+            output = output.format(titleid=self.get_titleid(), titleversion=self.hdr.titleversion)
         pack = self.pack()
         for cert in self.certificates:
             pack += cert.pack()
@@ -401,7 +402,8 @@ class Ticket:
            NOTE that the titleversion in the ticket is often wrong!
            Returns raw binary if no output is given, returns the file path else.
         """
-        output = output.format(titleid=self.get_titleid(), titleversion=self.hdr.titleversion)
+        if output:
+            output = output.format(titleid=self.get_titleid(), titleversion=self.hdr.titleversion)
         pack = self.pack()
         for cert in self.certificates:
             pack += cert.pack()
