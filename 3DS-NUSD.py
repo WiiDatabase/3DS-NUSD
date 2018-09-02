@@ -103,7 +103,7 @@ def main(titleid, titlever=None, pack_as_cia=True, keepcontents=True, enc_titlek
         utils.convert_size(total_size)
     ))
 
-    if not titlever:
+    if titlever == None:
         titlever = tmd.hdr.titleversion
     else:
         if titlever != tmd.hdr.titleversion:
