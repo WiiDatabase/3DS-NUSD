@@ -79,9 +79,9 @@ def main(titleid, titlever=None, pack_as_cia=True, keepcontents=True, enc_titlek
     nus = CIAGEN.NUS(titleid, titlever)
 
     if onlyticket:
-        print("Generating Ticket for Title {0} v{1}".format(titleid, "[Latest]" if not titlever else titlever))
+        print("Generating Ticket for Title {0} v{1}".format(titleid, "[Latest]" if titlever == None else titlever))
     else:
-        print("Downloading Title {0} v{1}".format(titleid, "[Latest]" if not titlever else titlever))
+        print("Downloading Title {0} v{1}".format(titleid, "[Latest]" if titlever == None else titlever))
 
     # Download TMD
     print("* Downloading TMD...")
@@ -93,8 +93,15 @@ def main(titleid, titlever=None, pack_as_cia=True, keepcontents=True, enc_titlek
 
     # Parse TMD
     print("* Parsing TMD...")
+    total_size = 0
+    for content in tmd.contents:
+        total_size += content.size
     print("    Title Version: {0}".format(tmd.hdr.titleversion))
-    print("    {0} Content{1}".format(len(tmd.contents), "s" if len(tmd.contents) > 1 else ""))
+    print("    {0} Content{1}: {2}".format(
+        len(tmd.contents),
+        "s" if len(tmd.contents) > 1 else "",
+        utils.convert_size(total_size)
+    ))
 
     if not titlever:
         titlever = tmd.hdr.titleversion
@@ -149,7 +156,7 @@ def main(titleid, titlever=None, pack_as_cia=True, keepcontents=True, enc_titlek
             print("      Failed to download content: Is the title still on the NUS?")
             return
         with open(content_path, 'wb') as content_file:
-            for chunk in req.iter_content(chunk_size=1024):
+            for chunk in req.iter_content(chunk_size=5242880):  # Read in 5 MB chunks
                 if chunk:
                     content_file.write(chunk)
 

@@ -559,7 +559,7 @@ class NUS:
     def tmd(self):
         tmd_url = self.url + "tmd"
 
-        if self._titlever:
+        if self._titlever != None:
             tmd_url += ".{0}".format(self._titlever)
         try:
             req = get(tmd_url)
