@@ -521,6 +521,9 @@ class CIA:
             filename = self.tmd.contents[num].get_cid()
             with open(os.path.join(output, filename), "wb") as content_file:
                 content_file.write(content)
+        if self.metadata:
+            with open(os.path.join(output, "meta"), "wb") as meta_file:
+                meta_file.write(self.metadata)
 
     def __repr__(self):
         return "CIA for Title {titleid} v{titlever}".format(
