@@ -6,4 +6,5 @@ src/
 .idea/
 
 # Data
+extracted_cias/
 titles/

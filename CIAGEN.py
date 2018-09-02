@@ -258,9 +258,10 @@ class TMD:
 
         # Certificates
         self.certificates = []
-        self.certificates.append(Certificate(file[pos:]))
-        pos += len(self.certificates[0])
-        self.certificates.append(Certificate(file[pos:]))
+        if file[pos:]:
+            self.certificates.append(Certificate(file[pos:]))
+            pos += len(self.certificates[0])
+            self.certificates.append(Certificate(file[pos:]))
 
     def get_titleid(self):
         return "{:08X}".format(self.hdr.titleid).zfill(16).lower()
@@ -386,9 +387,10 @@ class Ticket:
 
         # Certificates
         self.certificates = []
-        self.certificates.append(Certificate(file[pos:]))
-        pos += len(self.certificates[0])
-        self.certificates.append(Certificate(file[pos:]))
+        if file[pos:]:
+            self.certificates.append(Certificate(file[pos:]))
+            pos += len(self.certificates[0])
+            self.certificates.append(Certificate(file[pos:]))
 
     def get_titleid(self):
         return "{:08X}".format(self.hdr.titleid).zfill(16).lower()
@@ -431,6 +433,104 @@ class Ticket:
         output += "  Title key (encrypted): {0}\n".format(binascii.hexlify(self.hdr.titlekey).decode())
         if self.hdr.demo == 4:
             output += "  Demo limit active - Max playcount: {0}\n".format(self.hdr.maxplaycount)
+
+        return output
+
+
+class CIA:
+    """Represents a CIA file.
+       Reference: https://www.3dbrew.org/wiki/CIA
+
+    Args:
+        file (str): Path to CIA
+    """
+
+    class CIAHeader(Struct):
+        def __format__(self):
+            self.hdrsize = Struct.uint32
+            self.type = Struct.uint16
+            self.version = Struct.uint16
+            self.certchainsize = Struct.uint32
+            self.ticketsize = Struct.uint32
+            self.tmdsize = Struct.uint32
+            self.metasize = Struct.uint32
+            self.contentsize = Struct.uint64
+            self.content_index = Struct.uint8[0x2000]
+
+    def __init__(self, file):
+        if isinstance(file, str):
+            try:
+                file = open(file, 'rb').read()
+            except FileNotFoundError:
+                raise FileNotFoundError('File not found')
+
+        # Header
+        self.hdr = self.CIAHeader().unpack(file[:len(self.CIAHeader())])
+        pos = self.hdr.hdrsize
+
+        # Certificates (always 3)
+        # Order is: Root + XS + CP
+        pos += utils.align_pointer(pos)
+        self.certificates = []
+        for i in range(3):
+            self.certificates.append(Certificate(file[pos:]))
+            pos += len(self.certificates[i])
+
+        # Ticket
+        pos += utils.align_pointer(pos)
+        self.ticket = Ticket(file[pos:pos + self.hdr.ticketsize])
+        self.ticket.certificates.append(self.certificates[1])  # XS
+        self.ticket.certificates.append(self.certificates[0])  # Root
+        pos += self.hdr.ticketsize
+
+        # TMD
+        pos += utils.align_pointer(pos)
+        self.tmd = TMD(file[pos:pos + self.hdr.tmdsize])
+        self.tmd.certificates.append(self.certificates[2])  # CP
+        self.tmd.certificates.append(self.certificates[0])  # Root
+        pos += self.hdr.tmdsize
+
+        # Contents
+        pos += utils.align_pointer(pos)
+        self.contents = []
+        for content in self.tmd.contents:
+            content_size = content.size
+            self.contents.append(file[pos:pos + content_size])
+            pos += content_size
+
+        # Metadata, if present
+        pos += utils.align_pointer(pos)
+        if file[pos:]:
+            self.metadata = file[pos:]
+        else:
+            self.metadata = None
+
+    def unpack(self, output=None):
+        """Extracts CIA to output. Replaces {titleid} and {titleversion} if in foldername.
+           Extracts to "extracted_cias/TITLEID/TITLEVER" if no output is given
+       """
+        if output:
+            output = output.format(titleid=self.tmd.get_titleid(), titleversion=self.tmd.hdr.titleversion)
+        else:
+            output = os.path.join("extracted_cias", self.tmd.get_titleid(), str(self.tmd.hdr.titleversion))
+        if not os.path.exists(output):
+            os.makedirs(output)
+        self.tmd.dump(os.path.join(output, "tmd"))
+        self.ticket.dump(os.path.join(output, "cetk"))
+        for num, content in enumerate(self.contents):
+            filename = self.tmd.contents[num].get_cid()
+            with open(os.path.join(output, filename), "wb") as content_file:
+                content_file.write(content)
+
+    def __repr__(self):
+        return "CIA for Title {titleid} v{titlever}".format(
+            titleid=self.tmd.get_titleid(),
+            titlever=self.tmd.hdr.titleversion
+        )
+
+    def __str__(self):
+        output = str(self.tmd) + "\n"
+        output += str(self.ticket)
 
         return output
 

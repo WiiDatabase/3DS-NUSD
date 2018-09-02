@@ -3,7 +3,7 @@
 This is a 3DS NUS downloader written in Python 3(.6). It uses my own [CIAGEN](CIAGEN.py) to create CIAs from CDN content. 3DS-NUSD can even create tickets from encrypted title keys.
 It uses the `requests` module, so you'll need to install it with e.g. pip.
 
-"CIAGEN" can create CIAs from cetk + tmd + contents completely in Python without make_cdn_cia. Only thing missing is an implementation of the ticket template (and things listed below in the TODO).
+"CIAGEN" can create CIAs from cetk + tmd + contents completely in Python without make_cdn_cia. Only thing missing is an implementation of the ticket template (and things listed below in the TODO). It can also unpack a CIA to its CDN contents!
 
 ## Usage
 ```
@@ -28,7 +28,7 @@ optional arguments:
   - [X] Improve Struct code (for e.g. ticket template and reading from binary)
   - [ ] More Error handling and retrying
   - [ ] Improve error handling in CIAGEN, especially for certificates and too short tmds/tickets
-  - [ ] Support for decrypting & SHA256 verify
+  - [ ] Support for decrypting & SHA256 verify (via decTitleKeys.bin?)
   - [ ] uselocal parameter (needs SHA256 verifying)
   - [ ] GUI
   

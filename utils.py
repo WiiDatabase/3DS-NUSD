@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import math
+
 try:
     import asyncio
 except (ImportError, SyntaxError):
@@ -18,6 +19,20 @@ def align(value, blocksize=64):
         return b"\x00" * (64 - (value % 64))
     else:
         return b""
+
+
+def align_pointer(value, block=64):
+    """Aligns pointer to blocksize
+
+    Args:
+        value (int): Length of bytes
+        block (int): Block size (Default: 64)
+
+    """
+    if value % block != 0:
+        return block - (value % block)
+    else:
+        return 0
 
 
 def read_in_chunks(file_object, chunk_size=1024):
