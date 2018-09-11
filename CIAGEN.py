@@ -442,7 +442,7 @@ class CIA:
        Reference: https://www.3dbrew.org/wiki/CIA
 
     Args:
-        file (str): Path to CIA
+        file (Union[str, bytes]): Path to CIA or a CIA bytes-object
     """
 
     class CIAHeader(Struct):
@@ -470,6 +470,7 @@ class CIA:
 
         # Certificates (always 3)
         # Order is: Root + XS + CP
+        # TODO: Check vailidity of certs (+ dev certs)
         pos += utils.align_pointer(pos)
         self.certificates = []
         for i in range(3):
