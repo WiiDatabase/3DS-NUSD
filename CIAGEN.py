@@ -696,3 +696,14 @@ class NUS:
             id=self.tmd.get_titleid(),
             ver=self.tmd.hdr.titleversion,
         )
+
+    def __str__(self):
+        output = "NUS Content:\n"
+        for url in self.get_content_urls():
+            output += "  " + url + "\n"
+
+        output += "\n" + str(self.tmd) + "\n"
+        if self.ticket:
+            output += str(self.ticket)
+
+        return output
