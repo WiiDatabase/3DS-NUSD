@@ -139,7 +139,7 @@ class Certificate:
         return self.signature.pack() + self.certificate.pack() + self.pubkey.pack()
 
     def get_issuer(self):
-        return self.certificate.issuer.rstrip(b"\00").decode()
+        return self.certificate.issuer.rstrip(b"\00").decode().split("-")[-1]
 
     def get_name(self):
         return self.certificate.name.rstrip(b"\00").decode()
