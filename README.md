@@ -20,6 +20,7 @@ It uses the `requests` module, so you'll need to install it with e.g. pip.
 ### CIAGEN
 * Can be used as independent library
 * Creates valid CIAs
+* Verifies Signature (place root-key in the same directory)
 * Doesn't modify the original TMD and contents
 
 ## Usage

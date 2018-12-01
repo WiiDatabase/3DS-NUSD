@@ -1,10 +1,33 @@
 #!/usr/bin/env python3
+import hashlib
 import math
+
+from Crypto.Hash import SHA256
 
 try:
     import asyncio
 except (ImportError, SyntaxError):
     asyncio = None
+
+
+class Crypto:
+    @classmethod
+    def verify_signature(cls, cert, data_to_verify, signature):
+        """Returns True if the data is signed by the signer.
+           Args:
+               cert (Union[Certificate, RootCertificate]): Certificate or Root certificate class
+               data_to_verify (bytes): Data that will be verified (data without signature most of the time)
+               signature (Signature): Valid Signature class of the data
+        """
+        return cert.signer.verify(SHA256.new(data_to_verify), signature.signature.data)
+
+    @classmethod
+    def create_sha256hash_hex(cls, data):
+        return hashlib.sha256(data).hexdigest()
+
+    @classmethod
+    def create_sha256hash(cls, data):
+        return hashlib.sha256(data).digest()
 
 
 def align(value, blocksize=64):

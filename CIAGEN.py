@@ -3,6 +3,8 @@ import binascii
 import os
 import struct
 
+from Crypto.PublicKey.RSA import construct
+from Crypto.Signature import PKCS1_v1_5
 from requests import get, HTTPError
 
 import utils
@@ -63,9 +65,9 @@ class Signature:
 
     def get_signature_type(self):
         if self.signature_length == 0x200 + 0x3C:
-            return "RSA_4096 SHA256"
+            return "RSA-4096 SHA256"
         elif self.signature_length == 0x100 + 0x3C:
-            return "RSA_2048 SHA256"
+            return "RSA-2048 SHA256"
         elif self.signature_length == 0x3C + 0x40:
             return "ECDSA SHA256"
         else:
@@ -117,32 +119,116 @@ class Certificate:
         )
         pubkey_length = utils.get_key_length(self.certificate.key_type)
         if pubkey_length == 0x200 + 0x4 + 0x34:
-            self.pubkey = self.PubKeyRSA4096()
+            self.pubkey_struct = self.PubKeyRSA4096()
         elif pubkey_length == 0x100 + 0x4 + 0x34:
-            self.pubkey = self.PubKeyRSA2048()
+            self.pubkey_struct = self.PubKeyRSA2048()
         elif pubkey_length == 0x3C + 0x3C:
-            self.pubkey = self.PubKeyECC()
+            self.pubkey_struct = self.PubKeyECC()
         else:
             raise Exception("Unknown Public Key type")  # Should never happen
-        self.pubkey = self.pubkey.unpack(
+        self.pubkey_struct = self.pubkey_struct.unpack(
             filebytes[len(self.signature) + len(self.certificate):
                       len(self.signature) + len(self.certificate) + pubkey_length]
         )
+        if pubkey_length != 0x3C + 0x3C:
+            self.pubkey = construct(
+                (int.from_bytes(self.pubkey_struct.modulus, byteorder="big"), self.pubkey_struct.exponent)
+            )
+            self.signer = PKCS1_v1_5.new(self.pubkey)
+        else:
+            self.pubkey = None
+            self.signer = None
 
     def __len__(self):
-        return len(self.signature) + len(self.certificate) + len(self.pubkey)
+        return len(self.signature) + len(self.certificate) + len(self.pubkey_struct)
 
     def __repr__(self):
         return "{0} issued by {1}".format(self.get_name(), self.get_issuer())
 
+    def __str__(self):
+        output = "Certificate:\n"
+        output += "  {0} ({1})\n".format(self.get_name(), self.get_key_type())
+        output += "  Signed by {0} using {1}".format(self.get_issuer(), self.signature.get_signature_type())
+
+        return output
+
     def pack(self):
-        return self.signature.pack() + self.certificate.pack() + self.pubkey.pack()
+        return self.signature.pack() + self.signature_pack()
+
+    def signature_pack(self):
+        return self.certificate.pack() + self.pubkey_struct.pack()
 
     def get_issuer(self):
         return self.certificate.issuer.rstrip(b"\00").decode().split("-")[-1]
 
     def get_name(self):
         return self.certificate.name.rstrip(b"\00").decode()
+
+    def get_key_type(self):
+        # https://www.3dbrew.org/wiki/Certificates#Public_Key
+        key_types = [
+            "RSA-4096",
+            "RSA-2048",
+            "Elliptic Curve"
+        ]
+        try:
+            return key_types[self.certificate.key_type]
+        except IndexError:
+            return "Invalid key type"
+
+
+class RootCertificate:
+    """Represents the Root Certificate
+       Reference: https://www.3dbrew.org/wiki/Certificates
+    """
+
+    class PubKeyRSA4096(Struct):
+        __endian__ = Struct.BE
+
+        def __format__(self):
+            self.modulus = Struct.string(0x200)
+            self.exponent = Struct.uint32
+
+    def __init__(self, file):
+        if isinstance(file, str):  # Load file
+            try:
+                file = open(file, 'rb').read()
+            except FileNotFoundError:
+                raise FileNotFoundError('File not found')
+        self.pubkey_struct = self.PubKeyRSA4096().unpack(file)
+        self.pubkey = construct(
+            (int.from_bytes(self.pubkey_struct.modulus, byteorder="big"), self.pubkey_struct.exponent)
+        )
+        self.signer = PKCS1_v1_5.new(self.pubkey)
+
+    def __len__(self):
+        return len(self.pubkey_struct)
+
+    def __repr__(self):
+        return "3DS Root Certificate"
+
+    def __str__(self):
+        output = "Certificate:\n"
+        output += "  {0} ({1})\n".format(self.get_name(), self.get_key_type())
+
+        return output
+
+    def pack(self):
+        return self.pubkey_struct.pack()
+
+    @staticmethod
+    def get_name():
+        return "Root"
+
+    @staticmethod
+    def get_key_type():
+        return "RSA-4096"
+
+
+if os.path.isfile("root-key"):
+    ROOT_KEY = RootCertificate("root-key")  # https://static.hackmii.com/root-key
+else:
+    ROOT_KEY = None
 
 
 class TMD:
@@ -274,11 +360,17 @@ class TMD:
 
     def pack(self):
         """Returns TMD WITHOUT certificates."""
-        pack = self.signature.pack() + self.hdr.pack()
+        pack = self.signature.pack() + self.signature_pack()
         for content_info in self.content_info:
             pack += content_info.pack()
         for content in self.contents:
             pack += content.pack()
+        return pack
+
+    def signature_pack(self):
+        """Returns TMD only with header (the part that is signed)."""
+        pack = self.hdr.pack()
+
         return pack
 
     def dump(self, output=None):
@@ -296,6 +388,24 @@ class TMD:
                 return output
         else:
             return pack
+
+    def get_issuer(self):
+        """Returns list with the certificate chain issuers.
+           There should be exactly three: the last one (CP) signs the TMD,
+           the one before that (CA) signs the CP cert and
+           the first one (Root) signs the CA cert.
+        """
+        return self.hdr.issuer.rstrip(b"\00").decode().split("-")
+
+    def get_cert_by_name(self, name):
+        """Returns certificate by name."""
+        for i, cert in enumerate(self.certificates):
+            if cert.get_name() == name:
+                return i
+        if name == "Root":
+            if ROOT_KEY:
+                return ROOT_KEY
+        raise ValueError("Certificate '{0}' not found.".format(name))
 
     def __len__(self):
         """Returns length of TMD WITHOUT certificates."""
@@ -328,6 +438,86 @@ class TMD:
                 utils.convert_size(content.size)
             )
             output += binascii.hexlify(content.sha256).decode() + "\n"
+
+        # TODO: Improve this, is a bit complicated to understand and duplicated
+        if self.certificates:
+            output += "\n"
+            output += "  Certificates:\n"
+            try:
+                signs_tmd = self.get_cert_by_name(self.get_issuer()[-1])  # CP
+                signs_cp = self.get_cert_by_name(self.get_issuer()[1])  # CA
+            except ValueError:
+                output += "   Could not locate the needed certificates.\n"
+                return output
+            try:
+                signs_ca = self.get_cert_by_name(self.get_issuer()[0])  # Root
+            except ValueError:
+                signs_ca = None
+
+            # Check TMD signature
+            verified = utils.Crypto.verify_signature(
+                self.certificates[signs_tmd],
+                self.signature_pack(),
+                self.signature
+            )
+            sha256hash = utils.Crypto.create_sha256hash_hex(self.signature_pack())
+            output += "    TMD signed by {0} using {1}:\n      {2} ".format(
+                "-".join(self.get_issuer()),
+                self.certificates[signs_tmd].get_key_type(),
+                sha256hash
+            )
+            if verified:
+                output += "[OK]"
+            else:
+                output += "[FAIL]"
+            output += "\n"
+
+            # Check CP signature
+            verified = utils.Crypto.verify_signature(
+                self.certificates[signs_cp],
+                self.certificates[signs_tmd].signature_pack(),
+                self.certificates[signs_tmd].signature
+            )
+            sha256hash = utils.Crypto.create_sha256hash_hex(self.certificates[signs_tmd].signature_pack())
+            output += "    {0} ({1}) signed by {2} ({3}):\n      {4} ".format(
+                self.certificates[signs_tmd].get_name(),
+                self.certificates[signs_tmd].get_key_type(),
+                self.certificates[signs_tmd].get_issuer(),
+                self.certificates[signs_cp].get_key_type(),
+                sha256hash
+            )
+            if verified:
+                output += "[OK]"
+            else:
+                output += "[FAIL]"
+            output += "\n"
+
+            # Check Root signature
+            if signs_ca:
+                verified = utils.Crypto.verify_signature(
+                    signs_ca,
+                    self.certificates[signs_cp].signature_pack(),
+                    self.certificates[signs_cp].signature
+                )
+                sha256hash = utils.Crypto.create_sha256hash_hex(self.certificates[signs_cp].signature_pack())
+                output += "    {0} ({1}) signed by {2} ({3}):\n      {4} ".format(
+                    self.certificates[signs_cp].get_name(),
+                    self.certificates[signs_cp].get_key_type(),
+                    self.certificates[signs_cp].get_issuer(),
+                    ROOT_KEY.get_key_type(),
+                    sha256hash
+                )
+                if verified:
+                    output += "[OK]"
+                else:
+                    output += "[FAIL]"
+            else:
+                output += "    {0} ({1}) signed by {2}: Please place root-key in the same directory".format(
+                    self.certificates[signs_cp].get_name(),
+                    self.certificates[signs_cp].get_key_type(),
+                    self.certificates[signs_cp].get_issuer()
+                )
+            output += "\n"
 
         return output
 
@@ -395,9 +585,31 @@ class Ticket:
     def get_titleid(self):
         return "{:08X}".format(self.hdr.titleid).zfill(16).lower()
 
+    def get_issuer(self):
+        """Returns list with the certificate chain issuers.
+           There should be exactly three: the last one (XS) signs the Ticket,
+           the one before that (CA) signs the CP cert and
+           the first one (Root) signs the CA cert.
+        """
+        return self.hdr.issuer.rstrip(b"\00").decode().split("-")
+
+    def get_cert_by_name(self, name):
+        """Returns certificate by name."""
+        for i, cert in enumerate(self.certificates):
+            if cert.get_name() == name:
+                return i
+        if name == "Root":
+            if ROOT_KEY:
+                return ROOT_KEY
+        raise ValueError("Certificate '{0}' not found.".format(name))
+
     def pack(self):
         """Returns ticket WITHOUT certificates"""
         return self.signature.pack() + self.hdr.pack()
+
+    def signature_pack(self):
+        """Returns Ticket only with body (the part that is signed)."""
+        return self.hdr.pack()
 
     def dump(self, output=None):
         """Dumps ticket to output WITH Certificates. Replaces {titleid} and {titleversion} if in filename.
@@ -427,12 +639,93 @@ class Ticket:
         output = "Ticket:\n"
         output += "  Title ID: {0}\n".format(self.get_titleid())
         output += "  Ticket Title Version: {0}\n".format(self.hdr.titleversion)
-        output += "  Console ID: {0}\n".format(self.hdr.consoleid)
+        if self.hdr.consoleid:
+            output += "  Console ID: {0}\n".format(self.hdr.consoleid)
         output += "\n"
         output += "  Initialization vector: {0}\n".format(binascii.hexlify(self.titleiv).decode())
         output += "  Title key (encrypted): {0}\n".format(binascii.hexlify(self.hdr.titlekey).decode())
         if self.hdr.demo == 4:
             output += "  Demo limit active - Max playcount: {0}\n".format(self.hdr.maxplaycount)
+
+        # TODO: Improve this, is a bit complicated to understand and duplicated
+        if self.certificates:
+            output += "\n"
+            output += "  Certificates:\n"
+            try:
+                signs_ticket = self.get_cert_by_name(self.get_issuer()[-1])  # XS
+                signs_cp = self.get_cert_by_name(self.get_issuer()[1])  # CA
+            except ValueError:
+                output += "   Could not locate the needed certificates.\n"
+                return output
+            try:
+                signs_ca = self.get_cert_by_name(self.get_issuer()[0])  # Root
+            except ValueError:
+                signs_ca = None
+
+            # Check Ticket signature
+            verified = utils.Crypto.verify_signature(
+                self.certificates[signs_ticket],
+                self.signature_pack(),
+                self.signature
+            )
+            sha256hash = utils.Crypto.create_sha256hash_hex(self.signature_pack())
+            output += "    Ticket signed by {0} using {1}:\n      {2} ".format(
+                "-".join(self.get_issuer()),
+                self.certificates[signs_ticket].get_key_type(),
+                sha256hash
+            )
+            if verified:
+                output += "[OK]"
+            else:
+                output += "[FAIL]"
+            output += "\n"
+
+            # Check XS signature
+            verified = utils.Crypto.verify_signature(
+                self.certificates[signs_cp],
+                self.certificates[signs_ticket].signature_pack(),
+                self.certificates[signs_ticket].signature
+            )
+            sha256hash = utils.Crypto.create_sha256hash_hex(self.certificates[signs_ticket].signature_pack())
+            output += "    {0} ({1}) signed by {2} ({3}):\n      {4} ".format(
+                self.certificates[signs_ticket].get_name(),
+                self.certificates[signs_ticket].get_key_type(),
+                self.certificates[signs_ticket].get_issuer(),
+                self.certificates[signs_cp].get_key_type(),
+                sha256hash
+            )
+            if verified:
+                output += "[OK]"
+            else:
+                output += "[FAIL]"
+            output += "\n"
+
+            # Check Root signature
+            if signs_ca:
+                verified = utils.Crypto.verify_signature(
+                    signs_ca,
+                    self.certificates[signs_cp].signature_pack(),
+                    self.certificates[signs_cp].signature
+                )
+                sha256hash = utils.Crypto.create_sha256hash_hex(self.certificates[signs_cp].signature_pack())
+                output += "    {0} ({1}) signed by {2} ({3}):\n      {4} ".format(
+                    self.certificates[signs_cp].get_name(),
+                    self.certificates[signs_cp].get_key_type(),
+                    self.certificates[signs_cp].get_issuer(),
+                    ROOT_KEY.get_key_type(),
+                    sha256hash
+                )
+                if verified:
+                    output += "[OK]"
+                else:
+                    output += "[FAIL]"
+            else:
+                output += "    {0} ({1}) signed by {2}: Please place root-key in the same directory".format(
+                    self.certificates[signs_cp].get_name(),
+                    self.certificates[signs_cp].get_key_type(),
+                    self.certificates[signs_cp].get_issuer()
+                )
+            output += "\n"
 
         return output
 
