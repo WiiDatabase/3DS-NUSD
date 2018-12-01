@@ -514,7 +514,7 @@ class CIA:
             output = output.format(titleid=self.tmd.get_titleid(), titleversion=self.tmd.hdr.titleversion)
         else:
             output = os.path.join("extracted_cias", self.tmd.get_titleid(), str(self.tmd.hdr.titleversion))
-        if not os.path.exists(output):
+        if not os.path.isdir(output):
             os.makedirs(output)
         self.tmd.dump(os.path.join(output, "tmd"))
         self.ticket.dump(os.path.join(output, "cetk"))
@@ -545,6 +545,7 @@ class CIAMaker:
 
     Args:
         directory (str): Path to dir with cetk + tmd + contents
+        titlever (int): Title Version for TMD (reads tmd.TITLEVER instead of just "tmd")
     """
 
     class CIAHeader(Struct):
@@ -559,9 +560,13 @@ class CIAMaker:
             self.contentsize = Struct.uint64
             self.content_index = Struct.uint8[0x2000]
 
-    def __init__(self, directory):
-        self.ticket = Ticket(os.path.join(directory, "cetk"))
-        self.tmd = TMD(os.path.join(directory, "tmd"))
+    def __init__(self, directory, titlever=None):
+        self.directory = directory
+        self.ticket = Ticket(os.path.join(self.directory, "cetk"))
+        if titlever:
+            self.tmd = TMD(os.path.join(self.directory, "tmd.{0}".format(titlever)))
+        else:
+            self.tmd = TMD(os.path.join(self.directory, "tmd"))
         self.contents = []
 
         # Order of Certs in the CIA: Root Cert, Cetk Cert, TMD Cert (Root + XS + CP)
