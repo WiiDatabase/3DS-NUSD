@@ -856,7 +856,7 @@ class CIAMaker:
     def __init__(self, directory, titlever=None):
         self.directory = directory
         self.ticket = Ticket(os.path.join(self.directory, "cetk"))
-        if titlever:
+        if titlever != None:
             self.tmd = TMD(os.path.join(self.directory, "tmd.{0}".format(titlever)))
         else:
             self.tmd = TMD(os.path.join(self.directory, "tmd"))
