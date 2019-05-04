@@ -2,7 +2,7 @@
 from .common import *
 
 
-class Signature:
+class Signature(BigEndianStructure):
     """Represents the Signature
        Reference: https://www.3dbrew.org/wiki/Title_metadata#Signature_Data
 

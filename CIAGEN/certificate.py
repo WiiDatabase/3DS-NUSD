@@ -6,7 +6,7 @@ from .common import *
 from .signature import Signature
 
 
-class Certificate:
+class Certificate(BigEndianStructure):
     """Represents a certificate
        Reference: https://www.3dbrew.org/wiki/Certificates
 

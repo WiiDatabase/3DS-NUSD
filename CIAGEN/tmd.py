@@ -103,7 +103,7 @@ class TMD:
             return output
 
     def __init__(self, file):
-        if isinstance(file, str):
+        if not isinstance(file, bytes):
             with open(str(file), "rb") as fp:
                 file = fp.read()
 
@@ -185,6 +185,7 @@ class TMD:
            Returns raw binary if no output is given, returns the file path else.
         """
         if output:
+            output = str(output)
             output = output.format(titleid=self.get_titleid(), titleversion=self.header.titleversion)
         pack = self.pack()
         for cert in self.certificates:
